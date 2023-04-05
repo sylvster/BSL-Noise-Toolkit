@@ -22,39 +22,7 @@ import staLib  as sta_lib
 import utilsLib as utils_lib
 
 """
-  Name:   ntk_extractPsdHour.py - a Python 3 script to extract PSDs for a given channel and bounding
-                      parameters. The output is similar to PQLX's exPSDhour script
-
-  Copyright (C) 2020  Product Team, IRIS Data Management Center
-
-     This is a free software; you can redistribute it and/or modify
-     it under the terms of the GNU Lesser General Public License as
-     published by the Free Software Foundation; either version 3 of the
-     License, or (at your option) any later version.
-
-     This script is distributed in the hope that it will be useful, but
-     WITHOUT ANY WARRANTY; without even the implied warranty of
-     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-     Lesser General Public License (GNU-LGPL) for more details.  The
-     GNU-LGPL and further information can be found here:
-     http://www.gnu.org/
-
-     You should have received a copy of the GNU Affero General Public License
-     along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-  INPUT:
-
-  hourly PSD files
-
-  HISTORY:
-     2020-11-16 Manoch: V.2.0.0 Python 3 and adoption of PEP 8 style guide.
-     2015-04-02 Manoch: based on feedback from Robert Anthony, in addition to nan values other
-                        non-numeric values may exist. The write that contains a flot() conversion
-                        is placed in a try block so we can catch any non-numeric conversion issue
-                        and report it as user-defined NAN
-     2014-10-22 Manoch: added support for Windows installation
-     2014-10-06 IRIS DMC Product Team (MB): Beta release: output file name now includes the x-axis type
-     2013-05-19 IRIS DMC Product Team (MB): created 
+  Name: ntk_extractPsdDay.py - a Python 3 script 
 """
 version = 'V.2.0.0'
 script = sys.argv[0]
@@ -187,22 +155,23 @@ msg_lib.info(f'PSD DIR TAG: {psd_db_dir_tag}')
 if verbose > 0:
     msg_lib.info(f'PSD FILE TAG: {psd_db_file_tag}')
 
-# Open the output file.
-psd_dir_tag, psd_file_tag = file_lib.get_dir(param.dataDirectory, param.psdDirectory, network,
-                                             station, location, channel)
-file_lib.make_path(psd_dir_tag)
-tag_list = [psd_file_tag, start_date_time.split('.')[0], end_date_time.split('.')[0], xtype]
-output_file_name = file_lib.get_file_name(param.namingConvention, psd_dir_tag, tag_list)
-with open(output_file_name, 'w') as output_file:
-    # Loop through the windows.
-    print("DATA DAYS LIST:")
-    print(data_days_list)
-    for n in range(len(data_days_list)):
+#Begin looping through each individual day
+for day in data_days_list:
+    #Format the current day into a format compatible for file creation
+    curr_date_info = utils_lib.time_info(day)
+    curr_date_time = f"{curr_date_info[1]}-{curr_date_info[2]}-{curr_date_info[3]}"
 
-        thisFile = os.path.join(psd_db_dir_tag, data_days_list[n], psd_db_file_tag + '*' + xtype + '.txt')
-        msg_lib.info(f'Day: {data_days_list[n]}')
+    #Open the output file
+    psd_dir_tag, psd_file_tag = file_lib.get_dir(param.dataDirectory, param.psdDirectory, network,
+                                                 station, location, channel)
+    file_lib.make_path(psd_dir_tag)
+    tag_list = [psd_file_tag, curr_date_time, xtype]
+    output_file_name = file_lib.get_file_name(param.namingConvention, psd_dir_tag, tag_list)
+
+    with open(output_file_name, 'w') as output_file:
+        thisFile = os.path.join(psd_db_dir_tag, day, psd_db_file_tag + '*' + xtype + '.txt')
         this_file_list = sorted(glob.glob(thisFile))
-
+    
         if len(this_file_list) <= 0:
             msg_lib.warning('Main', 'No files found!')
             if verbose:
@@ -210,38 +179,34 @@ with open(output_file_name, 'w') as output_file:
             continue
         elif len(this_file_list) > 1:
             if verbose:
-                msg_lib.info(f'{len(this_file_list)} files  found!')
+                msg_lib.info(f'{len(this_file_list)} files found!')
 
-        # Found the file, open it and read it.
+        #Found the file, open it and read it
         for this_psd_file in this_file_list:
             if verbose > 0:
                 msg_lib.info(f'PSD FILE: {this_psd_file}')
             this_file_time_label = file_lib.get_file_times(param.namingConvention, channel, this_psd_file)
             this_file_time = UTCDateTime(this_file_time_label[0])
-            if start_datetime <= this_file_time <= end_datetime:
-                with open(this_psd_file) as file:
-                    if verbose > 0:
-                        msg_lib.info(f'working on ... {this_psd_file}')
+            with open(this_psd_file) as file:
+                if verbose > 0:
+                    msg_lib.info(f'working on ... {this_psd_file}')
+                
+                #Skip the header line
+                next(file)
 
-                    # Skip the header line.
-                    next(file)
+                # Go through individual periods/frequencies.
+                for line in file:
+                    # Each row, split column values.
+                    X, V = (line.strip()).split()
 
-                    # Go through individual periods/frequencies.
-                    for line in file:
-                        # Each row, split column values.
-                        X, V = (line.strip()).split()
+                    # Save the period/frequency and the value of interest.
+                    this_out_date, this_out_time = this_file_time_label[0].split('T')
 
-                        # Save the period/frequency and the value of interest.
-                        this_out_date, this_out_time = this_file_time_label[0].split('T')
-
-                        # Here we convert potential 'nan' and 'inf' (non-numeric) values to user defined NAN.
-                        try:
-                            output_file.write(f'{this_out_date}{param.separator}{this_out_time.split(".")[0]}'
-                                              f'{param.separator}{X}{param.separator}{round(float(V))}\n')
-                        except Exception as ex:
-                            output_file.write(f'{this_out_date}{param.separator}{this_out_time.split(".")[0]}'
-                                              f'{param.separator}{X}{param.separator}{param.intNan}\n')
-
-                file.close()
-msg_lib.info(f'OUTPUT FILE: {output_file_name}')
-output_file.close()
+                    # Here we convert potential 'nan' and 'inf' (non-numeric) values to user defined NAN.
+                    try:
+                        output_file.write(f'{this_out_date}{param.separator}{this_out_time.split(".")[0]}'
+                                            f'{param.separator}{X}{param.separator}{round(float(V))}\n')
+                    except Exception as ex:
+                        output_file.write(f'{this_out_date}{param.separator}{this_out_time.split(".")[0]}'
+                                            f'{param.separator}{X}{param.separator}{param.intNan}\n')
+        msg_lib.info(f'OUTPUT FILE: {output_file_name}')

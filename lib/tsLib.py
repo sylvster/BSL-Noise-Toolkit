@@ -221,7 +221,7 @@ def get_fedcatalog_station(req_url, request_start, request_end, chunk_length, ch
     bulk_list = collections.OrderedDict()
     dc_chunk_list = dict()
 
-    msg_lib.info(f'sending request to fedcatalog: {req_url}')
+    # msg_lib.info(f'sending request to fedcatalog: {req_url}')
 
     try:
         content = utils_lib.read_url(req_url)
@@ -250,12 +250,12 @@ def get_fedcatalog_station(req_url, request_start, request_end, chunk_length, ch
             if _par == 'DATACENTER':
                 if dc_name is not None:
                     previous_dc = dc_name
-                msg_lib.info(f'from the {_value} data center')
+                # msg_lib.info(f'from the {_value} data center')
                 dc_name, dc_url = _value.strip().split(',')
 
                 # Initialize the data center information, create chunk_count containers for chunked requests.
                 if dc_name not in catalog_info.keys():
-                    msg_lib.info(f'Initiating fedcatalog request for {dc_name}')
+                    # msg_lib.info(f'Initiating fedcatalog request for {dc_name}')
                     catalog_info[dc_name] = utils_lib.ObjDict(
                         {'url': dc_url, 'dataselect_service': '', 'bulk': list()})
 
@@ -292,7 +292,7 @@ def get_fedcatalog_station(req_url, request_start, request_end, chunk_length, ch
 
                 # Save the dataselect service address in the catalog for this DC,
                 catalog_info[dc_name]['dataselect_service'] = _value.strip()
-                msg_lib.info(f'dataselect service is {_value.strip()}')
+                # msg_lib.info(f'dataselect service is {_value.strip()}')
                 continue
             else:
                 # Ignore the other definitions.

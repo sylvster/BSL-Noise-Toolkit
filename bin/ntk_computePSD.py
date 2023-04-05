@@ -407,6 +407,7 @@ except Exception as e:
 
 psd_db_directory = utils_lib.mkdir(utils_lib.param(param, 'psdDbDirectory').psdDbDirectory)
 data_directory = utils_lib.mkdir(utils_lib.param(param, 'dataDirectory').dataDirectory)
+
 if request_client == 'FILES':
     cat = {'Files': {'bulk': utils_lib.param(param, 'fileTag').fileTag}}
 else:
@@ -414,8 +415,8 @@ else:
     request_query = utils_lib.get_fedcatalog_url(request_network, request_station, request_location,
                                                  request_channel, request_start_date_time,
                                                  request_end_date_time)
-
     fedcatalog_url = f'{shared.fedcatalog_url}{request_query}'
+    #Part that checks for url
     cat = ts_lib.get_fedcatalog_station(fedcatalog_url, request_start_date_time,
                                         request_end_date_time, shared.chunk_length, chunk_count=shared.chunk_count)
 
@@ -499,6 +500,18 @@ for _key in cat:
         segment_start_year = t_start.strftime('%Y')
         segment_start_doy = t_start.strftime('%j')
         segment_end = t_end.strftime('%Y-%m-%d %H:%M:%S.0')
+
+        #Skip computation if file already exists - Sylvester Seo
+        check_path_tag, check_path_file = file_lib.get_dir(param.dataDirectory, param.psdDbDirectory, request_network, 
+                                                           request_station, request_location, request_channel)
+        check_path_tag = os.path.join(check_path_tag, f"{segment_start_year}/{segment_start_doy}")
+        check_tag_list = [check_path_file, t_start.strftime("%Y-%m-%dT%H:%M:%S"), str(window_length), xtype]
+        check_path = file_lib.get_file_name(param.namingConvention, check_path_tag, check_tag_list)
+
+        if(do_plot == 0 and os.path.isfile(check_path)):
+            msg_lib.info(f"\033[93mData at time {segment_start} already exists, skipping...\033[00m")
+            continue
+
         if request_client == 'FILES':
             file_tag = file_lib.get_tag(".", [request_network, request_station, request_location, request_channel])
             msg_lib.info(f'Reading '
