@@ -1,24 +1,7 @@
- -----------------------------------------------------------------------------------------------------------------------
-  Incorporated Research Institutions for Seismology (IRIS)
-  Data Management Center (DMC)
-  Data Products Team
-  Noise Toolkit 
-  Python installation guide
+- install Python 3 on your computer (tested with Python 3.9.13)
 
-  V.2.0,0
-  2020-11-16
-
- -----------------------------------------------------------------------------------------------------------------------
-
-     - install Python 3 on your computer (tested with Python 3.8, may work with older 3 versions)
-
-     - additional required Python modules are:
-             . obspy (tested with version 1.2.2)
-             . matplotlib (tested with version 3.3.3)
-             . numpy (tested with version 6.2)
-             . scipy (tested with version 1.5.3)
-
-
-     - download the package to the destination directory
-     - execute individual Python files under the bin directory without an argument. A usage message should be displayed.
- 
+- additional required Python modules are:
+        . obspy (tested with version 1.3.1)
+        . matplotlib (tested with version 3.3.3)
+        . numpy (tested with version 1.23.4)
+        . scipy (tested with version 1.9.3)

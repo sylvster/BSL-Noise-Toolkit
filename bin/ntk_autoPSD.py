@@ -29,21 +29,26 @@ WHITE = "\033[1;37m"
 ENDC = '\033[0m'
 
 """
- Name: ntk_extractPsdPeriod.py - a Python 3 script to extract specified PSD values at specified period spanning across
+ Name: ntk_autoPSD.py - a Python 3 script to extract specified PSD values at specified period spanning across
  multiple different time stamps
 
- INPUT: the variables in param/extractPsdPeriod.json
+ INPUT: the variables in param/autoPSD.json
  OUTPUT: file in data/psdPr with json variables in the name
 
  Written by Sylvester Seo
 """
 
 #Read JSON file input
-json_path = os.path.join(param_path, 'extractPsdPeriod.json')
-json_object = open('param/extractPsdPeriod.json')
+json_path = os.path.join(param_path, 'autoPSD.json')
+json_object = open('param/autoPSD.json')
 json_dict = json.load(json_object)
 param_dict = json_dict['psd_parameters']
 settings_dict = json_dict['psd_period_settings']
+
+#Define required variables
+data_directory = shared.dataDirectory
+if(param_dict['directory'] != 'None'):
+    data_directory = param_dict['directory']
 
 #Check for valid network and station combos
 current_instruction = 0
@@ -71,7 +76,7 @@ for request_network in param_dict['net']:
 
         #Call bin/ntk_computePSD.py
         print(f"{WHITE}***************** CALLING COMPUTE PSD *****************{ENDC}")
-        compute_command = "python bin/ntk_computePSD.py" + args
+        compute_command = "python bin/super_test.py" + args
         print(compute_command)
         os.system(compute_command)
 
@@ -95,7 +100,7 @@ for request_network in param_dict['net']:
         utc_end_date = UTCDateTime(end_date)
 
         #Set filepath to the extracted PSD hour file
-        psd_hour_dir, psd_hour_tag = file_lib.get_dir(shared.dataDirectory, shared.psdDirectory, 
+        psd_hour_dir, psd_hour_tag = file_lib.get_dir(data_directory, shared.psdDirectory, 
                                     request_network, request_station, param_dict['loc'], param_dict['chan'])
 
         #Begin looping through each day requested
@@ -105,7 +110,7 @@ for request_network in param_dict['net']:
 
             curr_date = str(utc_curr_date).split('T')[0]
 
-            psd_hour_file = os.path.join(psd_hour_dir, f"{psd_hour_tag}.{curr_date}.{param_dict['xtype']}.txt")
+            psd_hour_file = os.path.join(psd_hour_dir, f"{psd_hour_tag}.{curr_date}.{param_dict['window_length']}.{param_dict['xtype']}.txt")
 
             #Begin reading the PSD hour file
             if(os.path.exists(psd_hour_file) and os.path.isfile(psd_hour_file)):
@@ -114,31 +119,47 @@ for request_network in param_dict['net']:
                         lines.append(line.split())
             else:
                 print('Error occurred within ntk_extractPsdDay.py, skipping...')
+                utc_curr_date += 24 * 3600
                 continue
 
             #Increment the current date
             utc_curr_date += 24 * 3600
 
         for period in settings_dict['period_value']:
-            #Now that data has been retrieved, find the specific period value
+            #Now that data has been retrieved, find the closest period value
             output_data = list()
+            min_dist = None
+            closest_period_line = None
+            prev_time = None
             for line in lines:
-                if line[PERIOD_INDEX] == period:
-                    output_data.append(line[:PERIOD_INDEX] + [line[VALUE_INDEX]])
-
+                curr_time = line[DATE_INDEX] + "T" + line[TIME_INDEX]
+                curr_dist = abs(float(period) - float(line[PERIOD_INDEX]))
+                if(prev_time != curr_time):
+                    if(not closest_period_line is None):
+                        output_data.append(closest_period_line)
+                    prev_time = curr_time
+                    min_dist = curr_dist
+                    closest_period_line = line
+                else:
+                    if(min_dist is None or min_dist >= curr_dist):
+                        min_dist = curr_dist
+                        closest_period_line = line
+            
             #If output data has no lines, exit
             if(len(output_data) == 0):
                 print("No data found within the computed PSD files, skipping...")
                 continue
 
+            output_data.append(closest_period_line)
+
             #Input the data into destination file
-            dest_dir, dest_tag = file_lib.get_dir(shared.dataDirectory, 'psdPr', 
+            dest_dir, dest_tag = file_lib.get_dir(data_directory, 'psdPr', 
                                                 request_network, request_station, param_dict['loc'], param_dict['chan'])
 
             file_lib.make_path(dest_dir)
             dest_tag = f'{dest_tag}.{period}'
 
-            final_destination = os.path.join(dest_dir, dest_tag)
+            final_destination = os.path.join(dest_dir, dest_tag) + ".txt"
 
             #Check that the settings are not overwrite
             if not settings_dict['overwrite'] and os.path.exists(final_destination):
@@ -169,7 +190,7 @@ for request_network in param_dict['net']:
             #Write to file
             output_lines = list()
             for data in output_data:
-                text = '  '.join(data[:PERIOD_INDEX]) + '    ' + data[PERIOD_INDEX]
+                text = '  '.join(data[:VALUE_INDEX]) + '    ' + data[VALUE_INDEX]
                 output_lines.append(text)
 
             with open(final_destination, 'w') as file:

@@ -44,5 +44,5 @@ fedcatalog_url = f'http://service.iris.edu/irisws/fedcatalog/1/query?'
 # To avoid  making one single large request for data to a data center, it is better to make multiple requests.
 # The parameter _chunck_length in the parameter file determines maximum length of request in seconds (chunk) that
 # will be sent  to a data center. This number should be adjusted based on the
-chunk_length = 6 * 3600
-chunk_count = 10
+chunk_length = 10 * 3600
+chunk_count = 5

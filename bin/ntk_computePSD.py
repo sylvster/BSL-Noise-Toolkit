@@ -215,7 +215,8 @@ else:
     sys.exit(code)
 
 # Run parameters.
-window_length = utils_lib.param(param, 'windowLength').windowLength
+# window_length = utils_lib.param(param, 'windowLength').windowLength
+window_length = int(utils_lib.get_param(args, 'window_length', 3600, usage))
 if not utils_lib.is_number(window_length):
     code = msg_lib.error(f'Invalid window_length  [{window_length}] in the parameter file', 2)
     sys.exit(code)
@@ -405,8 +406,12 @@ except Exception as e:
     usage()
     sys.exit()
 
-psd_db_directory = utils_lib.mkdir(utils_lib.param(param, 'psdDbDirectory').psdDbDirectory)
+# psd_db_directory = utils_lib.mkdir(utils_lib.param(param, 'psdDbDirectory').psdDbDirectory)
+parameter_directory = utils_lib.get_param(args, 'directory', None, usage)
+psd_db_directory = utils_lib.param(param, 'psdDbDirectory').psdDbDirectory
 data_directory = utils_lib.mkdir(utils_lib.param(param, 'dataDirectory').dataDirectory)
+if(parameter_directory != 'None'):
+    data_directory = parameter_directory
 
 if request_client == 'FILES':
     cat = {'Files': {'bulk': utils_lib.param(param, 'fileTag').fileTag}}
@@ -430,377 +435,382 @@ production_label = f'{production_label}\ndoi:{shared.ntk_doi}'
 # Get data from each Data Center.
 stream = None
 for _key in cat:
-    st = None
-    if verbose:
-        msg_lib.info('Sending requests for:')
-        if type(cat[_key]['bulk']) == str:
-            msg_lib.info(cat[_key]['bulk'])
+    
+    #Set the client up for this data center.
+    try:
+        client = Client(ts_lib.get_service_url(cat, _key))
+    except Exception as ex:
+        msg_lib.warning(script, ex)
+
+    for req in cat[_key]['bulk']:
+        (indiv_net, indiv_sta, indiv_loc, indiv_chan, indiv_start, indiv_end) = req
+        indiv_start = UTCDateTime(indiv_start)
+        indiv_end = UTCDateTime(indiv_end)
+
+        st = None
+        if verbose:
+            msg_lib.info('Sending requests for:')
+            if type(cat[_key]['bulk']) == str:
+                msg_lib.info(cat[_key]['bulk'])
+            else:
+                for line in cat[_key]['bulk']:
+                    msg_lib.info(line)
+
+        if not cat[_key]['bulk']:
+            msg_lib.warning(f'Skipping data request from {_key}, no stations to request!\n')
+            continue
+
+        if request_client == 'FILES':
+            msg_lib.info(f'Reading data from {cat[_key]["bulk"]}')
         else:
-            for line in cat[_key]['bulk']:
-                msg_lib.info(line)
+            msg_lib.info(f'Requesting data from {_key} via {ts_lib.get_service_url(cat, _key)}\n')
 
-    if not cat[_key]['bulk']:
-        msg_lib.warning(f'Skipping data request from {_key}, no stations to request!\n')
-        continue
-
-    if request_client == 'FILES':
-        msg_lib.info(f'Reading data from {cat[_key]["bulk"]}')
-    else:
-        msg_lib.info(f'Requesting data from {_key} via {ts_lib.get_service_url(cat, _key)}\n')
-
-        # Set the client up for this data center.
+        # Reqeust the waveform file
         try:
-            client = Client(ts_lib.get_service_url(cat, _key))
-            st = client.get_waveforms_bulk(cat[_key]['bulk'], attach_response=True)
+            st = client.get_waveforms(indiv_net, indiv_sta, indiv_loc, indiv_chan, 
+                                      indiv_start, indiv_end, attach_response=True)
         except Exception as ex:
             msg_lib.warning(script, ex)
 
-    """Start processing time segments.
+        """Start processing time segments.
 
-      work on each window duration (1-hour)
+        work on each window duration (1-hour)
 
-      LOOP: WINDOW
-      RA - note here we are defining the number of time-steps as the number of window shifts
-      that exist within the length of the request-time
+        LOOP: WINDOW
+        RA - note here we are defining the number of time-steps as the number of window shifts
+        that exist within the length of the request-time
 
-      flag to only process segments that start at the begining of the window
-    """
-    enforce_window_start = bool(utils_lib.param(param, 'enforceWindowStart').enforceWindowStart)
+        flag to only process segments that start at the begining of the window
+        """
+        enforce_window_start = bool(utils_lib.param(param, 'enforceWindowStart').enforceWindowStart)
 
-    # We only want to read as much data as we have in the stream.
-    if st is not None:
-        # When requesting data.
-        st_starttime = max([tr.stats.starttime for tr in st])
-        max_starttime = max(st_starttime, request_start_datetime)
+        # We only want to read as much data as we have in the stream.
+        max_starttime = indiv_start
+        min_endtime = indiv_end
 
-        st_endtime = max([tr.stats.endtime for tr in st])
-        min_endtime = min(st_endtime, request_end_datetime)
-    else:
-        # When reading files.
-        max_starttime = request_start_datetime
-        min_endtime = request_end_datetime
-
-    give_warning = True
-    for t_step in range(0, int(duration), int(utils_lib.param(param, 'windowShift').windowShift)):
-        if timing:
-            t0 = utils_lib.time_it('start WINDOW', t0)
-
-        t_start = max_starttime + t_step
-        t_end = t_start + window_length
-        if t_end > min_endtime:
-            t_end = min_endtime
-        if t_end - t_start < window_length:
-            if give_warning:
-                msg_lib.warning(script, f'Interval from {t_start} to {t_end} is shorter than the '
-                                        f'windowLength parameter {window_length} seconds, will skip.')
-                give_warning = False
-            continue
-
-        segment_start = t_start.strftime('%Y-%m-%d %H:%M:%S.0')
-        segment_start_year = t_start.strftime('%Y')
-        segment_start_doy = t_start.strftime('%j')
-        segment_end = t_end.strftime('%Y-%m-%d %H:%M:%S.0')
-
-        #Skip computation if file already exists - Sylvester Seo
-        check_path_tag, check_path_file = file_lib.get_dir(param.dataDirectory, param.psdDbDirectory, request_network, 
-                                                           request_station, request_location, request_channel)
-        check_path_tag = os.path.join(check_path_tag, f"{segment_start_year}/{segment_start_doy}")
-        check_tag_list = [check_path_file, t_start.strftime("%Y-%m-%dT%H:%M:%S"), str(window_length), xtype]
-        check_path = file_lib.get_file_name(param.namingConvention, check_path_tag, check_tag_list)
-
-        if(do_plot == 0 and os.path.isfile(check_path)):
-            msg_lib.info(f"\033[93mData at time {segment_start} already exists, skipping...\033[00m")
-            continue
-
-        if request_client == 'FILES':
-            file_tag = file_lib.get_tag(".", [request_network, request_station, request_location, request_channel])
-            msg_lib.info(f'Reading '
-                         f'{file_tag} '
-                         f'from {segment_start} to {segment_end} '
-                         f'from {utils_lib.param(param, "requestClient").requestClient} stream')
-        else:
-            file_tag = file_lib.get_tag(".", [request_network, request_station, request_location, request_channel])
-            msg_lib.info(f'Reading '
-                         f'{file_tag} '
-                         f'from {segment_start} to {segment_end} '
-                         f'from {utils_lib.param(param, "requestClient").requestClient} stream')
-
-        # Read from files but request response via Files and/or WS.
-        if request_client == 'FILES':
-            useClient = client
-            if not internet:
-                useClient = None
-            inventory, st = ts_lib.get_channel_waveform_files(request_network, request_station,
-                                                              request_location, request_channel,
-                                                              segment_start, segment_end, useClient,
-                                                              utils_lib.param(param, 'fileTag').fileTag,
-                                                              resp_dir=response_directory)
-        stream = st.slice(starttime=t_start, endtime=t_end, keep_empty_traces=False, nearest_sample=True)
-
-        if stream is None or not stream:
-            code = msg_lib.error(f'No data in stream', 4)
-            sys.exit(code)
-        else:
-            st_starttime = min([tr.stats.starttime for tr in stream])
-            st_endtime = max([tr.stats.endtime for tr in stream])
-            if request_start_datetime >= st_endtime or request_end_datetime <= st_starttime:
-                msg_lib.warning(script, f'Stream time from {st_starttime} to {st_endtime} is outside the '
-                                        f'request window {request_start_datetime} to {request_end_datetime}')
-                continue
-            else:
-                msg_lib.info(f'{script} {str(stream)}')
-
-        for tr in stream:
-
-            if request_start_datetime >= tr.stats.endtime or request_end_datetime <= tr.stats.starttime:
-                msg_lib.warning(script, f'Trace time from {tr.stats.starttime} to {tr.stats.endtime} is outside the '
-                                        f'request window {request_start_datetime} to {request_end_datetime}')
-                continue
-            network = tr.stats.network
-            station = tr.stats.station
-            location = sta_lib.get_location(tr.stats.location)
-            channel = tr.stats.channel
-            if verbose:
-                msg_lib.info(f'Response: {tr.stats}')
-            if channel == 'BDF':
-                powerUnits = utils_lib.param(param, 'powerUnits').powerUnits['PA']
-            else:
-                powerUnits = utils_lib.param(param, 'powerUnits').powerUnits[
-                    tr.stats.response.instrument_sensitivity.input_units]
-
-            xUnits = utils_lib.param(param, 'xlabel').xlabel[xtype.lower()]
-            traceKey = file_lib.get_tag('.', [network, station, location, channel])
-
-            # We first need to define the length of sub-windows based on the user-specified parameters
-
-            n_points = tr.stats.npts
-            sampling_frequency = tr.stats.sampling_rate
-            delta = float(tr.stats.delta)
-
-            # Number of samples per window is obtained by dividing the total number of samples
-            # by the number of side-by-side time windows along the trace
-
-            # First calculate the number of points needed based on the run parameters
-            #
-            # AR + RA - Integer operation will always round down - so add 1
-            this_n_samp = int((window_length / delta + 1) / utils_lib.param(param, 'nSegWindow').nSegWindow)
-            n_samp_needed = 2 ** int(math.log(this_n_samp, 2))  # make sure it is power of 2
-            if verbose:
-                msg_lib.info(f'nSamp Needed:{n_samp_needed}')
-
-            # Next calculate the number of points needed based on the trace parameters.
-            this_n_samp = int(n_points / utils_lib.param(param, 'nSegWindow').nSegWindow)
-
-            # Avoid log of bad numbers.
-            if this_n_samp <= 0:
-                msg_lib.warning('FFT',
-                                f'needed {n_samp_needed}'
-                                ' smples but no samples are available, will skip this trace')
-                continue
-            nfft = 2 ** int(math.log(this_n_samp, 2))  # make sure it is power of 2
-
-            if verbose:
-                msg_lib.info(f'nSamp Available: {nfft}')
-
-            if nfft < n_samp_needed:
-                msg_lib.warning('FFT', f'needed {n_samp_needed} samples but only '
-                                       f'{nfft} samples are available, will skip this trace')
-                continue
-
-            # see if segment starts within less than a sample from the beginning of window
-            if enforce_window_start and abs(tr.stats.starttime - t_start) > delta:
-                msg_lib.warning('FFT', f'parameter enforce_window_start is set '
-                                       f'and the segment does not start within less '
-                                       f'than a sample from the beginning of window, will skip this trace')
-                continue
-
-            # Define sub-window overlap based on user specified parameters - convert to decimal percentage
-            windlap = utils_lib.param(param, 'percentOverlap').percentOverlap * (1. / 100)
-            csd_label = f'power spectral density \n{window_length} s window / {windlap * 100}% overlap'
-
-            # Do the CSD
-            power, freq = csd(tr.data, tr.data, NFFT=nfft,
-                              noverlap=nfft * windlap, Fs=1. / delta,
-                              scale_by_freq=True)
-
-            # Remove first Point
-            freq = freq[1:]
-            power = power[1:]
-
-            period = 1. / freq
-
-            # make power a real quantity
-            power = np.abs(power)
-
-            # Remove the Response
-            resp, freqs = tr.stats.response.get_evalresp_response(delta,
-                                                                  nfft, output=utils_lib.param(param, 'unit').unit)
-            resp = abs(resp)
-            resp = resp[1:]
-
-            power = power / (np.abs(resp) ** 2)
-
-            smooth_x = []
-            smooth_psd = []
-
-            # Smoothing.
+        give_warning = True
+        #int(utils_lib.param(param, 'windowShift').windowShift))
+        for t_step in range(0, int(duration), int(window_length * 0.5)):
             if timing:
-                t0 = utils_lib.time_it('start SMOOTHING ', t0)
+                t0 = utils_lib.time_it('start WINDOW', t0)
 
-            msg_lib.info(f'SMOOTHING window {octave_window_width} shift '
-                         f'{octave_window_shift}')
-            if xtype == 'period':
+            t_start = max_starttime + t_step
+            t_end = t_start + window_length
+            if t_end > min_endtime:
+                t_end = min_endtime
+            if t_end - t_start < window_length:
+                if give_warning:
+                    msg_lib.warning(script, f'Interval from {t_start} to {t_end} is shorter than the '
+                                            f'windowLength parameter {window_length} seconds, will skip.')
+                    give_warning = False
+                continue
+
+            segment_start = t_start.strftime('%Y-%m-%d %H:%M:%S.0')
+            segment_start_year = t_start.strftime('%Y')
+            segment_start_doy = t_start.strftime('%j')
+            segment_end = t_end.strftime('%Y-%m-%d %H:%M:%S.0')
+
+            #Skip computation if file already exists - Sylvester Seo
+            check_path_tag, check_path_file = file_lib.get_dir(data_directory, param.psdDbDirectory, request_network, 
+                                                            request_station, request_location, request_channel)
+            check_path_tag = os.path.join(check_path_tag, f"{segment_start_year}/{segment_start_doy}")
+            check_tag_list = [check_path_file, t_start.strftime("%Y-%m-%dT%H:%M:%S"), str(window_length), xtype]
+            check_path = file_lib.get_file_name(param.namingConvention, check_path_tag, check_tag_list)
+
+            if(do_plot == 0 and os.path.isfile(check_path)):
+                msg_lib.info(f"\033[93mData at time {segment_start} already exists, skipping...\033[00m")
+                continue
+
+            if request_client == 'FILES':
+                file_tag = file_lib.get_tag(".", [request_network, request_station, request_location, request_channel])
+                msg_lib.info(f'Reading '
+                            f'{file_tag} '
+                            f'from {segment_start} to {segment_end} '
+                            f'from {utils_lib.param(param, "requestClient").requestClient} stream')
+            else:
+                file_tag = file_lib.get_tag(".", [request_network, request_station, request_location, request_channel])
+                msg_lib.info(f'Reading '
+                            f'{file_tag} '
+                            f'from {segment_start} to {segment_end} '
+                            f'from {utils_lib.param(param, "requestClient").requestClient} stream')
+
+            # Read from files but request response via Files and/or WS.
+            if request_client == 'FILES':
+                useClient = client
+                if not internet:
+                    useClient = None
+                inventory, st = ts_lib.get_channel_waveform_files(request_network, request_station,
+                                                                request_location, request_channel,
+                                                                segment_start, segment_end, useClient,
+                                                                utils_lib.param(param, 'fileTag').fileTag,
+                                                                resp_dir=response_directory)
+            stream = st.slice(starttime=t_start, endtime=t_end, keep_empty_traces=False, nearest_sample=True)
+
+            if stream is None or not stream:
+                code = msg_lib.error(f'No data in stream', 4)
+                continue
+                # sys.exit(code)
+            else:
+                st_starttime = min([tr.stats.starttime for tr in stream])
+                st_endtime = max([tr.stats.endtime for tr in stream])
+                if request_start_datetime >= st_endtime or request_end_datetime <= st_starttime:
+                    msg_lib.warning(script, f'Stream time from {st_starttime} to {st_endtime} is outside the '
+                                            f'request window {request_start_datetime} to {request_end_datetime}')
+                    continue
+                else:
+                    msg_lib.info(f'{script} {str(stream)}')
+
+            for tr in stream:
+
+                if request_start_datetime >= tr.stats.endtime or request_end_datetime <= tr.stats.starttime:
+                    msg_lib.warning(script, f'Trace time from {tr.stats.starttime} to {tr.stats.endtime} is outside the '
+                                            f'request window {request_start_datetime} to {request_end_datetime}')
+                    continue
+                network = tr.stats.network
+                station = tr.stats.station
+                location = sta_lib.get_location(tr.stats.location)
+                channel = tr.stats.channel
+                if verbose:
+                    msg_lib.info(f'Response: {tr.stats}')
+                if channel == 'BDF':
+                    powerUnits = utils_lib.param(param, 'powerUnits').powerUnits['PA']
+                else:
+                    powerUnits = utils_lib.param(param, 'powerUnits').powerUnits[
+                        tr.stats.response.instrument_sensitivity.input_units]
+
+                xUnits = utils_lib.param(param, 'xlabel').xlabel[xtype.lower()]
+                traceKey = file_lib.get_tag('.', [network, station, location, channel])
+
+                # We first need to define the length of sub-windows based on the user-specified parameters
+
+                n_points = tr.stats.npts
+                sampling_frequency = tr.stats.sampling_rate
+                delta = float(tr.stats.delta)
+
+                # Number of samples per window is obtained by dividing the total number of samples
+                # by the number of side-by-side time windows along the trace
+
+                # First calculate the number of points needed based on the run parameters
                 #
-                if str(utils_lib.param(param, 'xStart').xStart[plot_index]) == 'Nyquist':
-                    smooth_x, smooth_psd = sf_lib.smooth_nyquist(xtype, period, power, sampling_frequency,
-                                                                 octave_window_width,
-                                                                 octave_window_shift,
-                                                                 utils_lib.param(param, 'maxT').maxT)
-                else:
-                    smooth_x, smooth_psd = sf_lib.smooth_period(period, power, sampling_frequency,
-                                                                octave_window_width,
-                                                                octave_window_shift,
-                                                                utils_lib.param(param, 'maxT').maxT,
-                                                                float(utils_lib.param(param, 'xStart').xStart[
-                                                                          plot_index]))
-            else:
-                frequency = np.array(np.arange(1, (nfft / 2) + 1) / float(nfft * delta))
-
-                if str(utils_lib.param(param, 'xStart').xStart[plot_index]) == 'Nyquist':
-                    smooth_x, smooth_psd = sf_lib.smooth_nyquist(xtype, frequency, power, sampling_frequency,
-                                                                 octave_window_width,
-                                                                 octave_window_shift,
-                                                                 min_frequency)
-                else:
-                    smooth_x, smooth_psd = sf_lib.smooth_frequency(frequency, power, sampling_frequency,
-                                                                   octave_window_width,
-                                                                   octave_window_shift,
-                                                                   min_frequency,
-                                                                   float(
-                                                                       utils_lib.param(param, 'xStart').xStart[
-                                                                           plot_index]))
-
-            if timing:
-                t0 = utils_lib.time_it(
-                    f'SMOOTHING window {octave_window_width} shift '
-                    f'{octave_window_shift} DONE', t0)
-
-            # get the response information
-
-            msg_lib.info(tr.stats.response)
-
-            # Convert to dB.
-            power = 10.0 * np.log10(power)
-            smooth_psd = 10.0 * np.log10(smooth_psd)
-
-            # Create output paths if they do not exist.
-            if utils_lib.param(param, 'outputValues').outputValues > 0:
-                filePath, psd_file_tag = file_lib.get_dir(data_directory,
-                                                          psd_db_directory,
-                                                          network,
-                                                          station, location, channel)
-                filePath = os.path.join(filePath, segment_start_year, segment_start_doy)
-                file_lib.make_path(filePath)
-
-                # Output is based on the xtype.
+                # AR + RA - Integer operation will always round down - so add 1
+                this_n_samp = int((window_length / delta + 1) / utils_lib.param(param, 'nSegWindow').nSegWindow)
+                n_samp_needed = 2 ** int(math.log(this_n_samp, 2))  # make sure it is power of 2
                 if verbose:
-                    msg_lib.info(f'trChannel.stats: {tr.stats} '
-                                 f'REQUEST: {segment_start} '
-                                 f'TRACE: {tr.stats.starttime.strftime("%Y-%m-%dT%H:%M:%S")} '
-                                 f'DELTA: {tr.stats.delta} '
-                                 f'SAMPLES: '
-                                 f'{int(window_length / float(tr.stats.delta) + 1)} ')
+                    msg_lib.info(f'nSamp Needed:{n_samp_needed}')
 
-                trace_time = tr.stats.starttime
-                # Avoid file names with 59.59.
-                trace_time += datetime.timedelta(microseconds=10)
-                time_label = trace_time.strftime('%Y-%m-%dT%H:%M:%S')
-                tagList = [psd_file_tag, time_label,
-                           f'{window_length}', xtype]
-                output_file_name = file_lib.get_file_name(utils_lib.param(
-                    param, 'namingConvention').namingConvention, filePath, tagList)
-                msg_lib.message(f'OUTPUT: writing to {output_file_name}')
+                # Next calculate the number of points needed based on the trace parameters.
+                this_n_samp = int(n_points / utils_lib.param(param, 'nSegWindow').nSegWindow)
 
-                with open(output_file_name, 'w') as output_file:
+                # Avoid log of bad numbers.
+                if this_n_samp <= 0:
+                    msg_lib.warning('FFT',
+                                    f'needed {n_samp_needed}'
+                                    ' smples but no samples are available, will skip this trace')
+                    continue
+                nfft = 2 ** int(math.log(this_n_samp, 2))  # make sure it is power of 2
 
-                    # Output the header.
-                    output_file.write('%s %s\n' % (xUnits, powerUnits))
+                if verbose:
+                    msg_lib.info(f'nSamp Available: {nfft}')
 
-                    # Output data.
-                    for i_x, v_x in enumerate(smooth_x):
-                        output_file.write(f'{float(smooth_x[i_x]):11.6f} {float(smooth_psd[i_x]):11.4f}\n')
+                if nfft < n_samp_needed:
+                    msg_lib.warning('FFT', f'needed {n_samp_needed} samples but only '
+                                        f'{nfft} samples are available, will skip this trace')
+                    continue
 
-            # Start plotting.
-            if (utils_lib.param(param, 'plotSpectra').plotSpectra > 0 or utils_lib.param(param,
-                                                                                         'plotSmooth').plotSmooth > 0) \
-                    and do_plot:
-                action = 'Plot 2'
+                # see if segment starts within less than a sample from the beginning of window
+                if enforce_window_start and abs(tr.stats.starttime - t_start) > delta:
+                    msg_lib.warning('FFT', f'parameter enforce_window_start is set '
+                                        f'and the segment does not start within less '
+                                        f'than a sample from the beginning of window, will skip this trace')
+                    continue
 
+                # Define sub-window overlap based on user specified parameters - convert to decimal percentage
+                windlap = utils_lib.param(param, 'percentOverlap').percentOverlap * (1. / 100)
+                csd_label = f'power spectral density \n{window_length} s window / {windlap * 100}% overlap'
+
+                # Do the CSD
+                power, freq = csd(tr.data, tr.data, NFFT=nfft,
+                                noverlap=nfft * windlap, Fs=1. / delta,
+                                scale_by_freq=True)
+
+                # Remove first Point
+                freq = freq[1:]
+                power = power[1:]
+
+                period = 1. / freq
+
+                # make power a real quantity
+                power = np.abs(power)
+
+                # Remove the Response
+                resp, freqs = tr.stats.response.get_evalresp_response(delta,
+                                                                    nfft, output=utils_lib.param(param, 'unit').unit)
+                resp = abs(resp)
+                resp = resp[1:]
+
+                power = power / (np.abs(resp) ** 2)
+
+                smooth_x = []
+                smooth_psd = []
+
+                # Smoothing.
                 if timing:
-                    t0 = utils_lib.time_it('start PLOT ', t0)
+                    t0 = utils_lib.time_it('start SMOOTHING ', t0)
 
-                if verbose:
-                    msg_lib.info('POWER: ' + str(len(power)) + '\n')
-
-                fig = plt.figure()
-                fig.subplots_adjust(hspace=.2)
-                fig.subplots_adjust(wspace=.2)
-                fig.set_facecolor('w')
-
-                ax311 = plt.subplot(111)
-                ax311.set_xscale('log')
-                plabel_x, plabel_y = shared.production_label_position
-                ax311.text(plabel_x, plabel_y, production_label, horizontalalignment='left', fontsize=5,
-                           verticalalignment='top',
-                           transform=ax311.transAxes)
-
-                if do_plot_nnm:
-                    nlnm_x, nlnm_y = get_nlnm()
-                    nhnm_x, nhnm_y = get_nhnm()
-                    if xtype != 'period':
-                        nlnm_x = 1.0 / nlnm_x
-                        nhnm_x = 1.0 / nhnm_x
-                    plt.plot(nlnm_x, nlnm_y, lw=1, ls=':', c='k', label='NLNM, NHNM')
-                    plt.plot(nhnm_x, nhnm_y, lw=1, ls=':', c='k')
-
-                # Period for the x-axis.
+                msg_lib.info(f'SMOOTHING window {octave_window_width} shift '
+                            f'{octave_window_shift}')
                 if xtype == 'period':
-                    if utils_lib.param(param, 'plotSpectra').plotSpectra:
-                        plt.plot(period, power, utils_lib.param(param, 'colorSpectra').colorSpectra, label=csd_label)
-                    if utils_lib.param(param, 'plotSmooth').plotSmooth:
-                        plt.plot(smooth_x, smooth_psd, color=utils_lib.param(param, 'colorSmooth').colorSmooth,
-                                 label=smoothing_label)
-
-                # Frequency for the x-axis.
+                    #
+                    if str(utils_lib.param(param, 'xStart').xStart[plot_index]) == 'Nyquist':
+                        smooth_x, smooth_psd = sf_lib.smooth_nyquist(xtype, period, power, sampling_frequency,
+                                                                    octave_window_width,
+                                                                    octave_window_shift,
+                                                                    utils_lib.param(param, 'maxT').maxT)
+                    else:
+                        smooth_x, smooth_psd = sf_lib.smooth_period(period, power, sampling_frequency,
+                                                                    octave_window_width,
+                                                                    octave_window_shift,
+                                                                    utils_lib.param(param, 'maxT').maxT,
+                                                                    float(utils_lib.param(param, 'xStart').xStart[
+                                                                            plot_index]))
                 else:
-                    if utils_lib.param(param, 'plotSpectra').plotSpectra:
-                        plt.plot(frequency, power, utils_lib.param(param, 'colorSpectra').colorSpectra, label=csd_label)
-                    if utils_lib.param(param, 'plotSmooth').plotSmooth:
-                        plt.plot(smooth_x, smooth_psd, color=utils_lib.param(param, 'colorSmooth').colorSmooth,
-                                 label=smoothing_label)
+                    frequency = np.array(np.arange(1, (nfft / 2) + 1) / float(nfft * delta))
 
-                plt.xlabel(xUnits)
-                try:
-                    plt.xlim(utils_lib.param(param, 'xlimMin').xlimMin[channel][plot_index],
-                             utils_lib.param(param, 'xlimMax').xlimMax[channel][plot_index])
-                except Exception as ex:
-                    msg_lib.warning(script, f'xlimMin, xlimMax parameter error {ex}')
-
-                plt.ylabel(channel + ' ' + powerUnits)
-
-                try:
-                    plt.ylim(
-                        [utils_lib.param(param, 'ylimLow').ylimLow[channel],
-                         utils_lib.param(param, 'ylimHigh').ylimHigh[channel]])
-                except Exception as ex:
-                    msg_lib.warning(script, f'ylimLow, ylimHigh parameter error {ex}')
-
-                plt.title(f'{network}.{station}.{location}.{channel} from  {segment_start} to {segment_end}', size=10)
+                    if str(utils_lib.param(param, 'xStart').xStart[plot_index]) == 'Nyquist':
+                        smooth_x, smooth_psd = sf_lib.smooth_nyquist(xtype, frequency, power, sampling_frequency,
+                                                                    octave_window_width,
+                                                                    octave_window_shift,
+                                                                    min_frequency)
+                    else:
+                        smooth_x, smooth_psd = sf_lib.smooth_frequency(frequency, power, sampling_frequency,
+                                                                    octave_window_width,
+                                                                    octave_window_shift,
+                                                                    min_frequency,
+                                                                    float(
+                                                                        utils_lib.param(param, 'xStart').xStart[
+                                                                            plot_index]))
 
                 if timing:
-                    t0 = utils_lib.time_it('show PLOT ', t0)
-                x, y = shared.production_label_position
-                ax311.legend(frameon=False, prop={'size': 6})
-                plt.show()
-t0 = t1
-t0 = utils_lib.time_it('END', t0)
+                    t0 = utils_lib.time_it(
+                        f'SMOOTHING window {octave_window_width} shift '
+                        f'{octave_window_shift} DONE', t0)
+
+                # get the response information
+
+                msg_lib.info(tr.stats.response)
+
+                # Convert to dB.
+                power = 10.0 * np.log10(power)
+                smooth_psd = 10.0 * np.log10(smooth_psd)
+
+                # Create output paths if they do not exist.
+                if utils_lib.param(param, 'outputValues').outputValues > 0:
+                    filePath, psd_file_tag = file_lib.get_dir(data_directory,
+                                                            psd_db_directory,
+                                                            network,
+                                                            station, location, channel)
+                    filePath = os.path.join(filePath, segment_start_year, segment_start_doy)
+                    file_lib.make_path(filePath)
+
+                    # Output is based on the xtype.
+                    if verbose:
+                        msg_lib.info(f'trChannel.stats: {tr.stats} '
+                                    f'REQUEST: {segment_start} '
+                                    f'TRACE: {tr.stats.starttime.strftime("%Y-%m-%dT%H:%M:%S")} '
+                                    f'DELTA: {tr.stats.delta} '
+                                    f'SAMPLES: '
+                                    f'{int(window_length / float(tr.stats.delta) + 1)} ')
+
+                    trace_time = tr.stats.starttime
+                    # Avoid file names with 59.59.
+                    trace_time += datetime.timedelta(microseconds=10)
+                    time_label = trace_time.strftime('%Y-%m-%dT%H:%M:%S')
+                    tagList = [psd_file_tag, time_label,
+                            f'{window_length}', xtype]
+                    output_file_name = file_lib.get_file_name(utils_lib.param(
+                        param, 'namingConvention').namingConvention, filePath, tagList)
+                    msg_lib.message(f'OUTPUT: writing to {output_file_name}')
+
+                    with open(output_file_name, 'w') as output_file:
+
+                        # Output the header.
+                        output_file.write('%s %s\n' % (xUnits, powerUnits))
+
+                        # Output data.
+                        for i_x, v_x in enumerate(smooth_x):
+                            output_file.write(f'{float(smooth_x[i_x]):11.6f} {float(smooth_psd[i_x]):11.4f}\n')
+
+                # Start plotting.
+                if (utils_lib.param(param, 'plotSpectra').plotSpectra > 0 or utils_lib.param(param,
+                                                                                            'plotSmooth').plotSmooth > 0) \
+                        and do_plot:
+                    action = 'Plot 2'
+
+                    if timing:
+                        t0 = utils_lib.time_it('start PLOT ', t0)
+
+                    if verbose:
+                        msg_lib.info('POWER: ' + str(len(power)) + '\n')
+
+                    fig = plt.figure()
+                    fig.subplots_adjust(hspace=.2)
+                    fig.subplots_adjust(wspace=.2)
+                    fig.set_facecolor('w')
+
+                    ax311 = plt.subplot(111)
+                    ax311.set_xscale('log')
+                    plabel_x, plabel_y = shared.production_label_position
+                    ax311.text(plabel_x, plabel_y, production_label, horizontalalignment='left', fontsize=5,
+                            verticalalignment='top',
+                            transform=ax311.transAxes)
+
+                    if do_plot_nnm:
+                        nlnm_x, nlnm_y = get_nlnm()
+                        nhnm_x, nhnm_y = get_nhnm()
+                        if xtype != 'period':
+                            nlnm_x = 1.0 / nlnm_x
+                            nhnm_x = 1.0 / nhnm_x
+                        plt.plot(nlnm_x, nlnm_y, lw=1, ls=':', c='k', label='NLNM, NHNM')
+                        plt.plot(nhnm_x, nhnm_y, lw=1, ls=':', c='k')
+
+                    # Period for the x-axis.
+                    if xtype == 'period':
+                        if utils_lib.param(param, 'plotSpectra').plotSpectra:
+                            plt.plot(period, power, utils_lib.param(param, 'colorSpectra').colorSpectra, label=csd_label)
+                        if utils_lib.param(param, 'plotSmooth').plotSmooth:
+                            plt.plot(smooth_x, smooth_psd, color=utils_lib.param(param, 'colorSmooth').colorSmooth,
+                                    label=smoothing_label)
+
+                    # Frequency for the x-axis.
+                    else:
+                        if utils_lib.param(param, 'plotSpectra').plotSpectra:
+                            plt.plot(frequency, power, utils_lib.param(param, 'colorSpectra').colorSpectra, label=csd_label)
+                        if utils_lib.param(param, 'plotSmooth').plotSmooth:
+                            plt.plot(smooth_x, smooth_psd, color=utils_lib.param(param, 'colorSmooth').colorSmooth,
+                                    label=smoothing_label)
+
+                    plt.xlabel(xUnits)
+                    try:
+                        plt.xlim(utils_lib.param(param, 'xlimMin').xlimMin[channel][plot_index],
+                                utils_lib.param(param, 'xlimMax').xlimMax[channel][plot_index])
+                    except Exception as ex:
+                        msg_lib.warning(script, f'xlimMin, xlimMax parameter error {ex}')
+
+                    plt.ylabel(channel + ' ' + powerUnits)
+
+                    try:
+                        plt.ylim(
+                            [utils_lib.param(param, 'ylimLow').ylimLow[channel],
+                            utils_lib.param(param, 'ylimHigh').ylimHigh[channel]])
+                    except Exception as ex:
+                        msg_lib.warning(script, f'ylimLow, ylimHigh parameter error {ex}')
+
+                    plt.title(f'{network}.{station}.{location}.{channel} from  {segment_start} to {segment_end}', size=10)
+
+                    if timing:
+                        t0 = utils_lib.time_it('show PLOT ', t0)
+                    x, y = shared.production_label_position
+                    ax311.legend(frameon=False, prop={'size': 6})
+                    plt.show()
+    t0 = t1
+    t0 = utils_lib.time_it('END', t0)

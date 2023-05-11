@@ -33,7 +33,7 @@ timing = False
 do_plot = False
 verbose = False
 mode_list = ['0', 'plot', 'time', 'verbose']
-default_param_file = 'extractPsdHour'
+default_param_file = 'extractPsdDay'
 if os.path.isfile(os.path.join(param_path, f'{default_param_file}.py')):
     param = importlib.import_module(default_param_file)
 else:
@@ -113,6 +113,13 @@ station = utils_lib.get_param(args, 'sta', None, usage)
 location = sta_lib.get_location(utils_lib.get_param(args, 'loc', None, usage))
 channel = utils_lib.get_param(args, 'chan', None, usage)
 xtype = utils_lib.get_param(args, 'xtype', None, usage)
+window_length = utils_lib.get_param(args, 'window_length', None, usage)
+
+parameter_directory = utils_lib.get_param(args, 'directory', None, usage)
+data_directory = utils_lib.param(param, 'dataDirectory').dataDirectory
+if(parameter_directory != 'None'):
+    data_directory = parameter_directory
+
 
 # Specific start and end date and times from user.
 # We always want to start from the beginning of the day, so we discard user hours, if any.
@@ -162,14 +169,14 @@ for day in data_days_list:
     curr_date_time = f"{curr_date_info[1]}-{curr_date_info[2]}-{curr_date_info[3]}"
 
     #Open the output file
-    psd_dir_tag, psd_file_tag = file_lib.get_dir(param.dataDirectory, param.psdDirectory, network,
+    psd_dir_tag, psd_file_tag = file_lib.get_dir(data_directory, param.psdDirectory, network,
                                                  station, location, channel)
     file_lib.make_path(psd_dir_tag)
-    tag_list = [psd_file_tag, curr_date_time, xtype]
+    tag_list = [psd_file_tag, curr_date_time, window_length, xtype]
     output_file_name = file_lib.get_file_name(param.namingConvention, psd_dir_tag, tag_list)
 
     with open(output_file_name, 'w') as output_file:
-        thisFile = os.path.join(psd_db_dir_tag, day, psd_db_file_tag + '*' + xtype + '.txt')
+        thisFile = os.path.join(psd_db_dir_tag, day, psd_db_file_tag + '*' + window_length + '.' + xtype + '.txt')
         this_file_list = sorted(glob.glob(thisFile))
     
         if len(this_file_list) <= 0:

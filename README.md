@@ -1,11 +1,12 @@
-# Noise Toolkit
+# BSL Automatic PSD Calculator
 
 ## Description
 
+This repository contains 
 This repository contains a version of the IRIS DMC Noise Toolkit that has been modified for use by the Berkeley Seismology Lab. Files have been created/altered to provide new methods of waveform/metadata analysis and smoother integration with visualization on Grafana.
 
 ### Latest Release
-https://github.com/sylvster/noise-toolkit/releases/tag/v0.1.0-alpha  
+https://github.com/sylvster/noise-toolkit/releases/tag/v0.2.0
 This latest release under Python 3 includes:
 - A new script `ntk_extractPsdPeriod.py`
   - Given the necessary parameters, computes the Power Spectral Density (PSD) from requested stations and extracts all instances of the specified period/frequency into one file.
